@@ -288,8 +288,6 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
             perxplexity= exp(costs/iters)
   """
 
-  tf.train.write_graph(session.graph_def, '.', 'input.pb')
-
   epoch_size = ((len(data) // model.batch_size) - 1) // model.num_steps
   config = model.config
   costs = 0.0
