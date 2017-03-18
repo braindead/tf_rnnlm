@@ -133,9 +133,9 @@ if __name__ == '__main__':
     parser.add_argument("--model_dir", type=str, help="Model folder to export", required=True)
     args = parser.parse_args()
 
-    #freeze_graph(args.model_folder)
+    freeze_graph(args.model_dir)
 
-    test(args.model_dir, "so you need also to make sure your defining the right roles for them\n")
+    #test(args.model_dir, "so you need also to make sure your defining the right roles for them\n")
 
 
 

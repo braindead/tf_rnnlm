@@ -147,7 +147,6 @@ class Model(object):
           lstm_cell, output_keep_prob=config.keep_prob)
     cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
 
-    print ('config ', config.num_layers, size)
     self._initial_state = cell.zero_state(batch_size, data_type())
 
     with tf.device("/cpu:0"):
@@ -211,7 +210,6 @@ class Model(object):
     else:
       raise ValueError("Unsupported loss function: %s" % loss_fct) 
     self._cost = cost = tf.reduce_sum(loss) / batch_size
-    print ('cost var is', cost.name)
 
     self._final_state = state 
     self.probs = loss
@@ -306,19 +304,11 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
   predictions = []
   
   start_time = time.time()
-  print ('data = ', data)
-  print ('num_steps ', model.num_steps)
-  #print ('state = ', state)
 
   for step, (x, y) in enumerate(reader.iterator(data, model.batch_size,
                                                     model.num_steps)):
     if last_step > step: continue
 
-    #print ('x = ', x)
-    #print ('y = ', y)
-
-    #print ('input: ', model._input_data.name)
-    #print ('targets: ', model._targets.name)
 
     fetches = {"cost": model.cost, "state": model.final_state, "probs": model.probs}
 
@@ -329,13 +319,9 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     feed_dict[model._input_data] = x
     feed_dict[model._targets] = y
     for i, (c, h) in enumerate(model.initial_state):
-      #print ('model ', c.name, h.name)
-      #print ('state ', state[i].c.shape, state[i].h.shape)
       feed_dict[c] = state[i].c
       feed_dict[h] = state[i].h
    
-    #print (model.initial_state)
-
     # Catching error & returning -99 as we may need an output for each input
     # (can't just ignore)
     try: 
@@ -355,9 +341,6 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     costs += cost
     iters += model.num_steps
     
-    #print (fetches['state'])
-    print (x, y, cost)
-    #print ('iters = ', iters)
     # Predict mode
     if idict is not None:
       probs = probs[0]
@@ -542,7 +525,6 @@ def main(_):
       else:
         session = _restore_session(saver, session)
 
-        print ('doing line by line, predict=', predict)
         # Line by line processing (=ppl, predict, loglikes)
         if linebyline:
           if predict: print("[")
