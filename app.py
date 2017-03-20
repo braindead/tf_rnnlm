@@ -10,9 +10,9 @@ import os
 
 app = Flask(__name__)
 
-graph = load_graph("models/sc-small-model-t/frozen_model.pb")
+graph = load_graph("models/latest/frozen_model.pb")
 
-with open("models/sc-small-model-t/word_to_id", 'r') as f:
+with open("models/latest/word_to_id", 'r') as f:
     word_to_id = pickle.load(f)
 
 @app.route("/perplexity", methods=['POST'])

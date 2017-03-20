@@ -64,20 +64,11 @@ def load_graph(frozen_graph_filename):
     return graph
 
 
-def test (model_dir, line):
-
-    word_to_id_path = os.path.join(model_dir, "word_to_id")
-    with open(word_to_id_path, 'r') as f:
-        word_to_id = pickle.load(f)
+def test (graph, word_to_id, line):
 
     idict = None
     d = line.decode("utf-8").replace("\n", " <eos> ").split()
     test_data = [word_to_id[word] for word in d if word in word_to_id]
-
-    print test_data
-
-    model_pb = os.path.join (model_dir, "frozen_model.pb")
-    graph = load_graph(model_pb)
 
     costs = 0.0
     iters = 0
@@ -126,14 +117,14 @@ def test (model_dir, line):
             costs += r
             iters += num_steps
 
-        print "perplexity: %.3f" %np.exp(costs / iters)
+        return float("{:.2f}".format(np.exp(costs / iters)))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", type=str, help="Model folder to export", required=True)
     args = parser.parse_args()
 
-    #freeze_graph(args.model_folder)
+    #freeze_graph(args.model_dir)
 
     test(args.model_dir, "so you need also to make sure your defining the right roles for them\n")
 
