@@ -31,7 +31,7 @@ def clean(text,word_to_id):
     # word tokenize
     word_tokenized = nltk.word_tokenize(sentence)
 
-    out_sentence = [word_to_id[word] if word in word_to_id else unknown_token for word in word_tokenized]
+    out_sentence = [word_to_id[word] if word in word_to_id else word_to_id[unknown_token] for word in word_tokenized]
 
     return out_sentence
 
