@@ -72,6 +72,9 @@ from config import *
 # Using our custom reader
 import reader
 
+# same tokenization as training set
+import sentence_cleaner
+
 ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes"]
 LOSS_FCTS = ["softmax", "nce", "sampledsoftmax"]
 
