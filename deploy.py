@@ -64,7 +64,7 @@ def load_graph(frozen_graph_filename):
     return graph
 
 
-def test (graph, word_to_id, line):
+def test (graph, word_to_id, final_state_tensors, z0, z1, z2, z3, pl_x, pl_y, cost, line):
 
     idict = None
     d = line.decode("utf-8").replace("\n", " <eos> ").split()
@@ -77,29 +77,10 @@ def test (graph, word_to_id, line):
     #for op in graph.get_operations():
     #    print(op.name)
 
-
-    pl_x = graph.get_tensor_by_name('Test/Model/Placeholder:0')
-    pl_y = graph.get_tensor_by_name ('Test/Model/Placeholder_1:0')
-    cost = graph.get_tensor_by_name('Test/Model/truediv:0')
-
-    z0 = graph.get_tensor_by_name('Test/Model/zeros:0')
-    z1 = graph.get_tensor_by_name('Test/Model/zeros_1:0')
-    z2 = graph.get_tensor_by_name('Test/Model/zeros_2:0')
-    z3 = graph.get_tensor_by_name('Test/Model/zeros_3:0')
-
-    f0 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell0/BasicLSTMCell/add_2:0')
-    f1 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell0/BasicLSTMCell/mul_2:0')
-    f2 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell1/BasicLSTMCell/add_2:0')
-    f3 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell1/BasicLSTMCell/mul_2:0')
-
-    #init_state_tensors = (z0,z1, z2,z3)
-    final_state_tensors = (f0, f1, f2, f3)
-
     feed_dict  = {}
 
     with tf.Session(graph=graph) as sess:
         state = sess.run ([z0, z1, z2, z3])
-
 
         for step, (x, y) in enumerate(reader.iterator(test_data, 1, num_steps)):
             #print x, y
@@ -124,9 +105,9 @@ if __name__ == '__main__':
     parser.add_argument("--model_dir", type=str, help="Model folder to export", required=True)
     args = parser.parse_args()
 
-    #freeze_graph(args.model_dir)
+    freeze_graph(args.model_dir)
 
-    test(args.model_dir, "so you need also to make sure your defining the right roles for them\n")
+    #test(args.model_dir, "so you need also to make sure your defining the right roles for them\n")
 
 
 

@@ -112,6 +112,10 @@ flags.DEFINE_bool("use_fp16", False,
 flags.DEFINE_bool("nosave", False, "Set to force model not to be saved")
 flags.DEFINE_integer("log", 10, "How often to print information and save model: each (epoch_size/log) steps. (--log 100: each 1% --log 50: each 2%, --log 10: each 10% etc")
 
+flags.DEFINE_integer("ppl_threshold", 100, "cutoff for perplexity value")
+flags.DEFINE_string("ppl_compare", "", "gt or lt")
+flags.DEFINE_bool("ppl_debug", False, "dump sentence pairs")
+
 for param in MODEL_PARAMS_INT:
   flags.DEFINE_integer(param, None, "Manually set model %s" % param)
 for param in MODEL_PARAMS_FLOAT:
@@ -150,7 +154,6 @@ class Model(object):
           lstm_cell, output_keep_prob=config.keep_prob)
     cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
 
-    print ('config ', config.num_layers, size)
     self._initial_state = cell.zero_state(batch_size, data_type())
 
     with tf.device("/cpu:0"):
@@ -214,8 +217,7 @@ class Model(object):
     else:
       raise ValueError("Unsupported loss function: %s" % loss_fct)
     self._cost = cost = tf.reduce_sum(loss) / batch_size
-
-    self._final_state = state 
+    self._final_state = state
     self.probs = loss
 
     if not is_training:
@@ -291,9 +293,6 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
         - else:
             perxplexity= exp(costs/iters)
   """
-
-  tf.train.write_graph(session.graph_def, '.', 'input.pb')
-
   epoch_size = ((len(data) // model.batch_size) - 1) // model.num_steps
   config = model.config
   costs = 0.0
@@ -308,19 +307,9 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
   predictions = []
 
   start_time = time.time()
-  print ('data = ', data)
-  print ('num_steps ', model.num_steps)
-  #print ('state = ', state)
-
   for step, (x, y) in enumerate(reader.iterator(data, model.batch_size,
                                                     model.num_steps)):
     if last_step > step: continue
-
-    #print ('x = ', x)
-    #print ('y = ', y)
-
-    #print ('input: ', model._input_data.name)
-    #print ('targets: ', model._targets.name)
 
     fetches = {"cost": model.cost, "state": model.final_state, "probs": model.probs}
 
@@ -331,10 +320,9 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     feed_dict[model._input_data] = x
     feed_dict[model._targets] = y
     for i, (c, h) in enumerate(model.initial_state):
-      #print ('model ', c.name, h.name)
-      #print ('state ', state[i].c.shape, state[i].h.shape)
       feed_dict[c] = state[i].c
       feed_dict[h] = state[i].h
+
 
     # Catching error & returning -99 as we may need an output for each input
     # (can't just ignore)
@@ -346,8 +334,6 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
       print("[ERROR] Aborting run_step; returning -99", file=sys.stderr)
       print(e, file=sys.stderr)
       return -99.0
-
-
 
     cost = vals['cost']
     state = vals['state']
@@ -508,7 +494,7 @@ def main(_):
 
 
     saver = tf.train.Saver()
-    init_op = tf.global_variables_initializer()
+    init_op = tf.initialize_all_variables()
     with tf.Session() as session:
       session.run(init_op)
       if train:
@@ -539,33 +525,48 @@ def main(_):
       else:
         session = _restore_session(saver, session)
 
-        print ('doing line by line, predict=', predict)
         # Line by line processing (=ppl, predict, loglikes)
         if linebyline:
           if predict: print("[")
           while True:
-            line = sys.stdin.readline()
-            if not line: break
+            lines = sys.stdin.readline()
+            if not lines: break
 
-            idict = None
-            test_data = sentence_cleaner.clean(line,word_to_id)
+            lines = lines.strip().split('\t')
+            ppls = []
+            for line in lines:
+                idict = None
+                test_data = sentence_cleaner.clean(line,word_to_id)
 
-            if len(test_data) < 2:
-              print(-9999)
-              continue
+                if len(test_data) < 2:
+                  print(-9999)
+                  continue
 
-            # Prediction mode
-            if predict:
-              inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
-              ppl, predict = run_epoch(session, mtest, test_data, idict=inverse_dict)
-              res = {'ppl': ppl, 'predictions': predict}
-              print(json.dumps(res)+",")
+                # Prediction mode
+                if predict:
+                  inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
+                  ppl, predict = run_epoch(session, mtest, test_data, idict=inverse_dict)
+                  res = {'ppl': ppl, 'predictions': predict}
+                  print(json.dumps(res)+",")
 
-            # ppl or loglikes
+                # ppl or loglikes
+                else:
+                  o = run_epoch(session, mtest, test_data, loglikes=loglikes)
+                  ppls.append(o)
+
+            if len(lines) is 2:
+                print("%.2f, %.2f, %.2f" % (ppls[0], ppls[1], ppls[0] - ppls[1]))
+                if FLAGS.ppl_debug is True:
+                    print(lines)
             else:
-              o = run_epoch(session, mtest, test_data, loglikes=loglikes)
-              print("%.3f" % o)
-
+                if FLAGS.ppl_compare is "gt":
+                    if ppls[0] > FLAGS.ppl_threshold:
+                        print("%.2f" % ppls[0])
+                elif FLAGS.ppl_compare is "lt":
+                    if ppls[0] < FLAGS.ppl_threshold:
+                        print("%.2f" % ppls[0])
+                else:
+                    print("%.2f" % ppls[0])
 
           if predict: print("]")
 
