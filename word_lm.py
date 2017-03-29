@@ -494,7 +494,7 @@ def main(_):
 
 
     saver = tf.train.Saver()
-    init_op = tf.initialize_all_variables()
+    init_op = tf.global_variables_initializer()
     with tf.Session() as session:
       session.run(init_op)
       if train:
