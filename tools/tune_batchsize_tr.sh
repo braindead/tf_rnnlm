@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DATA_PATH="./simple-examples/data"
+DATA_PATH="./data"
 MODEL_ROOT="./batchsize_tuning"
 LOSS="sampledsoftmax"
 LOG=5

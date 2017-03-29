@@ -64,20 +64,11 @@ def load_graph(frozen_graph_filename):
     return graph
 
 
-def test (model_dir, line):
-
-    word_to_id_path = os.path.join(model_dir, "word_to_id")
-    with open(word_to_id_path, 'r') as f:
-        word_to_id = pickle.load(f)
+def test (graph, word_to_id, final_state_tensors, z0, z1, z2, z3, pl_x, pl_y, cost, line):
 
     idict = None
     d = line.decode("utf-8").replace("\n", " <eos> ").split()
     test_data = [word_to_id[word] for word in d if word in word_to_id]
-
-    print test_data
-
-    model_pb = os.path.join (model_dir, "frozen_model.pb")
-    graph = load_graph(model_pb)
 
     costs = 0.0
     iters = 0
@@ -86,29 +77,10 @@ def test (model_dir, line):
     #for op in graph.get_operations():
     #    print(op.name)
 
-
-    pl_x = graph.get_tensor_by_name('Test/Model/Placeholder:0')
-    pl_y = graph.get_tensor_by_name ('Test/Model/Placeholder_1:0')
-    cost = graph.get_tensor_by_name('Test/Model/truediv:0')
-
-    z0 = graph.get_tensor_by_name('Test/Model/zeros:0')
-    z1 = graph.get_tensor_by_name('Test/Model/zeros_1:0')
-    z2 = graph.get_tensor_by_name('Test/Model/zeros_2:0')
-    z3 = graph.get_tensor_by_name('Test/Model/zeros_3:0')
-
-    f0 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell0/BasicLSTMCell/add_2:0')
-    f1 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell0/BasicLSTMCell/mul_2:0')
-    f2 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell1/BasicLSTMCell/add_2:0')
-    f3 = graph.get_tensor_by_name('Test/Model/RNN/MultiRNNCell/Cell1/BasicLSTMCell/mul_2:0')
-
-    #init_state_tensors = (z0,z1, z2,z3)
-    final_state_tensors = (f0, f1, f2, f3)
-
     feed_dict  = {}
 
     with tf.Session(graph=graph) as sess:
         state = sess.run ([z0, z1, z2, z3])
-
 
         for step, (x, y) in enumerate(reader.iterator(test_data, 1, num_steps)):
             #print x, y
@@ -126,7 +98,7 @@ def test (model_dir, line):
             costs += r
             iters += num_steps
 
-        print "perplexity: %.3f" %np.exp(costs / iters)
+        return float("{:.2f}".format(np.exp(costs / iters)))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

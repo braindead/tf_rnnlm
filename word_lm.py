@@ -72,6 +72,9 @@ from config import *
 # Using our custom reader
 import reader
 
+# same tokenization as training set
+import sentence_cleaner
+
 ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes"]
 LOSS_FCTS = ["softmax", "nce", "sampledsoftmax"]
 
@@ -82,7 +85,7 @@ MODEL_PARAMS_INT = [
       "hidden_size",
       "max_epoch",
       "max_max_epoch",
-      "batch_size", 
+      "batch_size",
       "vocab_size"]
 MODEL_PARAMS_FLOAT = [
       "init_scale",
@@ -101,13 +104,17 @@ flags.DEFINE_string(
     "A type of model. Possible options are: 'small', 'medium', 'large' or path to config file.")
 flags.DEFINE_string("data_path", None,
                     "Where the training/test data is stored.")
-flags.DEFINE_string("loss", "softmax", 
+flags.DEFINE_string("loss", "softmax",
                     "The loss function to use. Possible options are %s" % ", ".join(LOSS_FCTS))
 flags.DEFINE_bool("use_fp16", False,
                   "Train using 16-bit floats instead of 32bit floats")
 
 flags.DEFINE_bool("nosave", False, "Set to force model not to be saved")
 flags.DEFINE_integer("log", 10, "How often to print information and save model: each (epoch_size/log) steps. (--log 100: each 1% --log 50: each 2%, --log 10: each 10% etc")
+
+flags.DEFINE_integer("ppl_threshold", 100, "cutoff for perplexity value")
+flags.DEFINE_string("ppl_compare", "", "gt or lt")
+flags.DEFINE_bool("ppl_debug", False, "dump sentence pairs")
 
 for param in MODEL_PARAMS_INT:
   flags.DEFINE_integer(param, None, "Manually set model %s" % param)
@@ -157,7 +164,7 @@ class Model(object):
     if is_training and config.keep_prob < 1:
       inputs = tf.nn.dropout(inputs, config.keep_prob)
 
-  
+
     inputs = [tf.squeeze(input_, [1])
            for input_ in tf.split(1, num_steps, inputs)]
     outputs, state = tf.nn.rnn(cell=cell, inputs=inputs, initial_state=self._initial_state)
@@ -168,22 +175,22 @@ class Model(object):
     mask = tf.ones([self.batch_size * self.num_steps])
 
     if test_opti:
-      # If test_opti is True we assume that the model has w_t variable 
+      # If test_opti is True we assume that the model has w_t variable
       # this makes a huge performance improvement (especially on large model/vocab
       # but require model weights to be transposed.
-      # See transpose.py 
+      # See transpose.py
       self.w_t = w_t = tf.get_variable("w_t", [size, vocab_size], dtype=data_type())
       self.b = b = tf.get_variable("b", [vocab_size], dtype=data_type())
       loss, logits = self.softmax(output, w_t, b, mask)
       self.logits = logits
 
-    elif not is_training or self.loss_fct == "softmax": 
+    elif not is_training or self.loss_fct == "softmax":
       # Regular testing using softmax and default "w" weights matrix
       # It may be really slower than 'test_opti'
       w = tf.get_variable("w", [vocab_size, size], dtype=data_type())
-      b = tf.get_variable("b", [vocab_size], dtype=data_type()) 
+      b = tf.get_variable("b", [vocab_size], dtype=data_type())
       w_t = tf.transpose(w)
-      
+
       loss, logits = self.softmax(output, w_t, b, mask)
       self.logits = logits
 
@@ -193,10 +200,10 @@ class Model(object):
       num_samples = 64
       labels = tf.reshape(self._targets, [-1,1])
       hidden = output
-      loss = tf.nn.nce_loss(w, b,                           
+      loss = tf.nn.nce_loss(w, b,
                             hidden,
                             labels,
-                            num_samples, 
+                            num_samples,
                             vocab_size)
     elif self.loss_fct == "sampledsoftmax":
       w = tf.get_variable("w", [vocab_size, size], dtype=data_type())
@@ -204,16 +211,15 @@ class Model(object):
       num_samples = 1024
       labels = tf.reshape(self._targets, [-1,1])
       hidden = output
-      
+
       loss = self.sampled_softmax(w, b, labels, hidden, num_samples, mask)
 
     else:
-      raise ValueError("Unsupported loss function: %s" % loss_fct) 
+      raise ValueError("Unsupported loss function: %s" % loss_fct)
     self._cost = cost = tf.reduce_sum(loss) / batch_size
-
-    self._final_state = state 
+    self._final_state = state
     self.probs = loss
-    
+
     if not is_training:
       return
 
@@ -239,7 +245,7 @@ class Model(object):
         labels_ = tf.reshape(labels_, [-1, 1])
         return tf.nn.sampled_softmax_loss(
             w, b, inputs_, labels_, num_samples, vocab_size)
-    
+
     loss = tf.nn.seq2seq.sequence_loss_by_example(
         [ hidden],
         [ labels ],
@@ -287,26 +293,23 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
         - else:
             perxplexity= exp(costs/iters)
   """
-
   epoch_size = ((len(data) // model.batch_size) - 1) // model.num_steps
   config = model.config
   costs = 0.0
-  iters = 0 
- 
+  iters = 0
+
   last_step = config.step if model.is_training else 0
   if last_step > 0:
     state = _load_state()
     print("Last step: %d" % last_step)
-  else: 
+  else:
     state = session.run(model.initial_state)
   predictions = []
-  
-  start_time = time.time()
 
+  start_time = time.time()
   for step, (x, y) in enumerate(reader.iterator(data, model.batch_size,
                                                     model.num_steps)):
     if last_step > step: continue
-
 
     fetches = {"cost": model.cost, "state": model.final_state, "probs": model.probs}
 
@@ -319,10 +322,11 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     for i, (c, h) in enumerate(model.initial_state):
       feed_dict[c] = state[i].c
       feed_dict[h] = state[i].h
-   
+
+
     # Catching error & returning -99 as we may need an output for each input
     # (can't just ignore)
-    try: 
+    try:
       vals = session.run(fetches, feed_dict)
     except ValueError as e:
       print("[ERROR] Error while running step %d (value: =\"%s\")" % (step, str(x)),
@@ -331,14 +335,12 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
       print(e, file=sys.stderr)
       return -99.0
 
-
-
     cost = vals['cost']
     state = vals['state']
     probs = vals['probs']
     costs += cost
     iters += model.num_steps
-    
+
     # Predict mode
     if idict is not None:
       probs = probs[0]
@@ -346,9 +348,9 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
       xx = x[0][0]
       yy = y[0][0]
       prediction = {
-        'word': idict[xx], 
-        "target": idict[yy], 
-        "prob": float(probs[yy]), 
+        'word': idict[xx],
+        "target": idict[yy],
+        "prob": float(probs[yy]),
         "pred_word": idict[next_id],
         "pred_prob": float(probs[next_id]),
         }
@@ -363,19 +365,19 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
              iters * model.batch_size / (time.time() - start_time)))
       if saver is not None:
         _save_checkpoint(saver, session, "ep_%d_step_%d.ckpt" % (config.epoch, step))
-        _save_state(state) 
+        _save_state(state)
         config.step = step
-        config.save() 
-  
+        config.save()
+
 
   config.step = 0
 
-  
+
   # Perplexity and loglikes
   ppl = np.exp(costs / iters)
   ll = -costs / np.log(10)
   if not idict:
-    ret = ll if loglikes else ppl  
+    ret = ll if loglikes else ppl
     return ret
   return ppl, predictions
 
@@ -393,13 +395,13 @@ def _load_state():
 
 def _save_state(state):
   with open(_state_path(), 'w') as f:
-    pickle.dump(state, f)  
+    pickle.dump(state, f)
 
 from config import Config
 def get_config():
-  params = {key: FLAGS.__getattr__(key) for key in MODEL_PARAMS} 
+  params = {key: FLAGS.__getattr__(key) for key in MODEL_PARAMS}
   config_path = os.path.join(FLAGS.model_dir, "config")
-  return Config(config=FLAGS.config, path=config_path, params=params) 
+  return Config(config=FLAGS.config, path=config_path, params=params)
 
 def _restore_session(saver, session):
   ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
@@ -407,7 +409,7 @@ def _restore_session(saver, session):
     saver.restore(session, ckpt.model_checkpoint_path)
     return session
   else:
-    raise ValueError("No checkpoint file found") 
+    raise ValueError("No checkpoint file found")
 
 
 import os
@@ -416,7 +418,7 @@ import util
 def main(_):
   assert(FLAGS.action in ACTIONS)
   assert(FLAGS.loss in LOSS_FCTS)
-  
+
   loss_fct = FLAGS.loss
   action = FLAGS.action
 
@@ -444,7 +446,7 @@ def main(_):
     config.epoch = 1
     config.step = 0
 
-  # Reading fast_test. 
+  # Reading fast_test.
   # This option is enabled by 'transpose.py'
   fast_test = False
   if "fast_test" in config.__dict__:
@@ -456,7 +458,7 @@ def main(_):
     print("""\n\n[WARNING]: You are using a test feature involving 'softmax'
                you must consider using 'fast_test' feature'""")
     print("[WARNING]: See transpose.py for more information")
-   
+
   eval_config = Config(clone=config)
   eval_config.batch_size = 1
   eval_config.num_steps = 1
@@ -480,29 +482,29 @@ def main(_):
           m = Model(is_training=True, config=config, loss_fct=loss_fct)
         tf.scalar_summary("Training Loss", m.cost)
         tf.scalar_summary("Learning Rate", m.lr)
-      
+
       with tf.name_scope("Valid"):
         with tf.variable_scope("Model", reuse=True, initializer=initializer):
           mvalid = Model(is_training=False, config=config)
         tf.scalar_summary("Validation Loss", mvalid.cost)
-    
+
     with tf.name_scope("Test"):
       with tf.variable_scope("Model", reuse=train, initializer=initializer):
         mtest = Model(is_training=False, config=eval_config, test_opti=fast_test)
 
-   
+
     saver = tf.train.Saver()
-    init_op = tf.global_variables_initializer()
+    init_op = tf.initialize_all_variables()
     with tf.Session() as session:
       session.run(init_op)
       if train:
         config.save()
         if action == "continue":
           session = _restore_session(saver, session)
-       
-        saver = None if FLAGS.nosave else saver 
+
+        saver = None if FLAGS.nosave else saver
         print("Starting training from epoch %d using %s" % (config.epoch, loss_fct))
-        
+
         while config.epoch <= config.max_max_epoch:
           i = config.epoch
           lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
@@ -512,14 +514,14 @@ def main(_):
           train_perplexity = run_epoch(session, m, train_data, eval_op=m.train_op,
                                        verbose=True, saver=saver, log=FLAGS.log)
           print("Epoch: %d Train Perplexity: %.3f" % (i, train_perplexity))
-          
+
           valid_perplexity = run_epoch(session, mvalid, valid_data)
           print("Epoch: %d Valid Perplexity: %.3f" % (i, valid_perplexity))
-          
+
           config.step = 0
           config.epoch += 1
           config.save()
-        
+
       else:
         session = _restore_session(saver, session)
 
@@ -527,37 +529,52 @@ def main(_):
         if linebyline:
           if predict: print("[")
           while True:
-            line = sys.stdin.readline()
-            if not line: break
-            
-            idict = None
-            d = line.decode("utf-8").replace("\n", " <eos> ").split()
-            test_data = [word_to_id[word] for word in d if word in word_to_id]
-          
-            if len(test_data) < 2:
-              print(-9999)
-              continue
+            lines = sys.stdin.readline()
+            if not lines: break
 
-            # Prediction mode
-            if predict:
-              inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
-              ppl, predict = run_epoch(session, mtest, test_data, idict=inverse_dict)
-              res = {'ppl': ppl, 'predictions': predict}
-              print(json.dumps(res)+",")
-            
-            # ppl or loglikes
+            lines = lines.strip().split('\t')
+            ppls = []
+            for line in lines:
+                idict = None
+                test_data = sentence_cleaner.clean(line,word_to_id)
+
+                if len(test_data) < 2:
+                  print(-9999)
+                  continue
+
+                # Prediction mode
+                if predict:
+                  inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
+                  ppl, predict = run_epoch(session, mtest, test_data, idict=inverse_dict)
+                  res = {'ppl': ppl, 'predictions': predict}
+                  print(json.dumps(res)+",")
+
+                # ppl or loglikes
+                else:
+                  o = run_epoch(session, mtest, test_data, loglikes=loglikes)
+                  ppls.append(o)
+
+            if len(lines) is 2:
+                print("%.2f, %.2f, %.2f" % (ppls[0], ppls[1], ppls[0] - ppls[1]))
+                if FLAGS.ppl_debug is True:
+                    print(lines)
             else:
-              o = run_epoch(session, mtest, test_data, loglikes=loglikes)
-              print("%.3f" % o)
-              
+                if FLAGS.ppl_compare is "gt":
+                    if ppls[0] > FLAGS.ppl_threshold:
+                        print("%.2f" % ppls[0])
+                elif FLAGS.ppl_compare is "lt":
+                    if ppls[0] < FLAGS.ppl_threshold:
+                        print("%.2f" % ppls[0])
+                else:
+                    print("%.2f" % ppls[0])
 
           if predict: print("]")
 
           # Whole text processing
         elif test:
           test_perplexity = run_epoch(session, mtest, test_data)
-          print("Test Perplexity: %.3f" % test_perplexity)   
-                    
+          print("Test Perplexity: %.3f" % test_perplexity)
+
 if __name__ == "__main__":
   tf.app.run()
 
