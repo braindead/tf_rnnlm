@@ -559,10 +559,10 @@ def main(_):
                 if FLAGS.ppl_debug is True:
                     print(lines)
             else:
-                if FLAGS.ppl_compare is "gt":
+                if FLAGS.ppl_compare == "gt":
                     if ppls[0] > FLAGS.ppl_threshold:
                         print("%.2f" % ppls[0])
-                elif FLAGS.ppl_compare is "lt":
+                elif FLAGS.ppl_compare == "lt":
                     if ppls[0] < FLAGS.ppl_threshold:
                         print("%.2f" % ppls[0])
                 else:
