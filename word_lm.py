@@ -112,7 +112,7 @@ flags.DEFINE_bool("use_fp16", False,
 flags.DEFINE_bool("nosave", False, "Set to force model not to be saved")
 flags.DEFINE_integer("log", 10, "How often to print information and save model: each (epoch_size/log) steps. (--log 100: each 1% --log 50: each 2%, --log 10: each 10% etc")
 
-flags.DEFINE_integer("ppl_threshold", 100, "cutoff for perplexity value")
+flags.DEFINE_float("ppl_threshold", 100, "cutoff for perplexity value")
 flags.DEFINE_string("ppl_compare", "", "gt or lt")
 flags.DEFINE_bool("ppl_debug", False, "dump sentence pairs")
 
@@ -306,6 +306,7 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     state = session.run(model.initial_state)
   predictions = []
 
+  new_probs = []
   start_time = time.time()
   for step, (x, y) in enumerate(reader.iterator(data, model.batch_size,
                                                     model.num_steps)):
@@ -338,6 +339,7 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     cost = vals['cost']
     state = vals['state']
     probs = vals['probs']
+    new_probs.append(vals['probs'][0])
     costs += cost
     iters += model.num_steps
 
@@ -372,13 +374,12 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
 
   config.step = 0
 
-
   # Perplexity and loglikes
   ppl = np.exp(costs / iters)
   ll = -costs / np.log(10)
   if not idict:
     ret = ll if loglikes else ppl
-    return ret
+    return np.var(new_probs)
   return ppl, predictions
 
 def _save_checkpoint(saver, session, name):

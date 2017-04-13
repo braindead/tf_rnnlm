@@ -1,7 +1,7 @@
 #!/bin/bash
 
 threshold=90
-if [ $1 -gt 0 ]
+if [ ! -z $1 ]
 then
     threshold=$1
 fi
