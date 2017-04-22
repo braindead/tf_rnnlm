@@ -90,6 +90,4 @@ ENV/
 
 data/*
 models/*
-=======
-models/*
-data/*
+*.swp

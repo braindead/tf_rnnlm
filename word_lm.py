@@ -65,6 +65,7 @@ import json
 import numpy as np
 import tensorflow as tf
 import sys
+from scipy.ndimage.interpolation import shift
 # We put config in a separate file so that loading a config object does (using pickle)
 # import this file twice (which triggers error)
 from config import *
@@ -75,7 +76,7 @@ import reader
 # same tokenization as training set
 import sentence_cleaner
 
-ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes"]
+ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes", "probs"]
 LOSS_FCTS = ["softmax", "nce", "sampledsoftmax"]
 
 MODEL_PARAMS_INT = [
@@ -112,9 +113,8 @@ flags.DEFINE_bool("use_fp16", False,
 flags.DEFINE_bool("nosave", False, "Set to force model not to be saved")
 flags.DEFINE_integer("log", 10, "How often to print information and save model: each (epoch_size/log) steps. (--log 100: each 1% --log 50: each 2%, --log 10: each 10% etc")
 
-flags.DEFINE_float("ppl_threshold", 100, "cutoff for perplexity value")
-flags.DEFINE_string("ppl_compare", "", "gt or lt")
-flags.DEFINE_bool("ppl_debug", False, "dump sentence pairs")
+flags.DEFINE_float("threshold", 100., "cutoff for perplexity or loglikes or probs value")
+flags.DEFINE_bool("debug", False, "dump sentence pairs")
 
 for param in MODEL_PARAMS_INT:
   flags.DEFINE_integer(param, None, "Manually set model %s" % param)
@@ -181,8 +181,9 @@ class Model(object):
       # See transpose.py
       self.w_t = w_t = tf.get_variable("w_t", [size, vocab_size], dtype=data_type())
       self.b = b = tf.get_variable("b", [vocab_size], dtype=data_type())
-      loss, logits = self.softmax(output, w_t, b, mask)
+      loss, logits, probs = self.softmax(output, w_t, b, mask)
       self.logits = logits
+      self.probs = probs
 
     elif not is_training or self.loss_fct == "softmax":
       # Regular testing using softmax and default "w" weights matrix
@@ -191,8 +192,9 @@ class Model(object):
       b = tf.get_variable("b", [vocab_size], dtype=data_type())
       w_t = tf.transpose(w)
 
-      loss, logits = self.softmax(output, w_t, b, mask)
+      loss, logits, probs = self.softmax(output, w_t, b, mask)
       self.logits = logits
+      self.probs = probs
 
     elif self.loss_fct == "nce":
       w = tf.get_variable("w", [vocab_size, size], dtype=data_type())
@@ -218,7 +220,6 @@ class Model(object):
       raise ValueError("Unsupported loss function: %s" % loss_fct)
     self._cost = cost = tf.reduce_sum(loss) / batch_size
     self._final_state = state
-    self.probs = loss
 
     if not is_training:
       return
@@ -260,7 +261,9 @@ class Model(object):
         [logits],
         [tf.reshape(self._targets, [-1])],
         [mask])
-    return loss, logits
+    probs = tf.nn.softmax(logits)
+
+    return loss, logits, probs
 
   @property
   def initial_state(self):
@@ -283,7 +286,7 @@ class Model(object):
     return self._train_op
 
 
-def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, saver=None, loglikes=False, log=10):
+def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, saver=None, action="", log=10):
   """Runs the model on the given data.
       Returns:
         - if idict is set (prediction mode):
@@ -306,7 +309,8 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     state = session.run(model.initial_state)
   predictions = []
 
-  new_probs = []
+  word_probs = []
+
   start_time = time.time()
   for step, (x, y) in enumerate(reader.iterator(data, model.batch_size,
                                                     model.num_steps)):
@@ -339,9 +343,10 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
     cost = vals['cost']
     state = vals['state']
     probs = vals['probs']
-    new_probs.append(vals['probs'][0])
     costs += cost
     iters += model.num_steps
+
+    word_probs.append(probs[0][y[0][0]])
 
     # Predict mode
     if idict is not None:
@@ -374,13 +379,21 @@ def run_epoch(session, model, data, eval_op=None, verbose=False, idict=None, sav
 
   config.step = 0
 
+
   # Perplexity and loglikes
   ppl = np.exp(costs / iters)
   ll = -costs / np.log(10)
-  if not idict:
-    ret = ll if loglikes else ppl
-    return np.var(new_probs)
-  return ppl, predictions
+
+  if action == "ppl":
+      return ppl
+  elif action == "loglikes":
+      return ll
+  elif action == "predict":
+      return predictions
+  elif action == "probs":
+      return shift(word_probs, 1, cval=0.)
+
+  return None
 
 def _save_checkpoint(saver, session, name):
   path = os.path.join(FLAGS.model_dir, name)
@@ -424,11 +437,8 @@ def main(_):
   action = FLAGS.action
 
   train = action in ["train", "continue"]
-  ppl = action == "ppl"
-  loglikes = action == "loglikes"
-  predict = action == "predict"
-  linebyline = ppl or loglikes or predict
   test = action == "test"
+  linebyline = action in ["ppl", "loglikes", "predict", "probs"]
 
   util.mkdirs(FLAGS.model_dir)
 
@@ -453,12 +463,6 @@ def main(_):
   if "fast_test" in config.__dict__:
     # Be sure to set a boolean
     fast_test = True if config.fast_test else False
-
-  # Warning if we're slowing testing
-  if not (fast_test or train):
-    print("""\n\n[WARNING]: You are using a test feature involving 'softmax'
-               you must consider using 'fast_test' feature'""")
-    print("[WARNING]: See transpose.py for more information")
 
   eval_config = Config(clone=config)
   eval_config.batch_size = 1
@@ -528,13 +532,12 @@ def main(_):
 
         # Line by line processing (=ppl, predict, loglikes)
         if linebyline:
-          if predict: print("[")
           while True:
             lines = sys.stdin.readline()
             if not lines: break
 
             lines = lines.strip().split('\t')
-            ppls = []
+            results = []
             for line in lines:
                 idict = None
                 test_data = sentence_cleaner.clean(line,word_to_id)
@@ -543,33 +546,47 @@ def main(_):
                   print(-9999)
                   continue
 
-                # Prediction mode
-                if predict:
-                  inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
-                  ppl, predict = run_epoch(session, mtest, test_data, idict=inverse_dict)
-                  res = {'ppl': ppl, 'predictions': predict}
-                  print(json.dumps(res)+",")
+                inverse_dict = dict(zip(word_to_id.values(), word_to_id.keys()))
+                result = run_epoch(session, mtest, test_data, idict=inverse_dict, action=FLAGS.action)
+                results.append((test_data, result))
 
-                # ppl or loglikes
+            if FLAGS.action == 'predict':
+                print(json.dumps(results))
+
+            if FLAGS.action in ['ppl', 'loglikes']:
+                if len(lines) is 2:
+                    print("%.2f, %.2f, %.2f" % (results[0][1], results[1][1], results[0][1] - results[1][1]))
+                    if FLAGS.debug is True:
+                        print(lines)
                 else:
-                  o = run_epoch(session, mtest, test_data, loglikes=loglikes)
-                  ppls.append(o)
+                    if results[0][1] > FLAGS.threshold:
+                        print("%.2f" % results[0][1])
 
-            if len(lines) is 2:
-                print("%.2f, %.2f, %.2f" % (ppls[0], ppls[1], ppls[0] - ppls[1]))
-                if FLAGS.ppl_debug is True:
-                    print(lines)
-            else:
-                if FLAGS.ppl_compare == "gt":
-                    if ppls[0] > FLAGS.ppl_threshold:
-                        print("%.2f" % ppls[0])
-                elif FLAGS.ppl_compare == "lt":
-                    if ppls[0] < FLAGS.ppl_threshold:
-                        print("%.2f" % ppls[0])
-                else:
-                    print("%.2f" % ppls[0])
+            elif FLAGS.action == "probs":
+                for j, result in enumerate(results):
 
-          if predict: print("]")
+                    if FLAGS.debug is True:
+                        print(lines[j])
+
+                    out_str = ""
+                    test_data = result[0]
+                    probs = result[1]
+                    count = 0
+                    for i, prob in enumerate(probs):
+                        if i == 0:
+                            continue
+
+                        if FLAGS.debug is True:
+                            out_str += "(%s %.3f) " % (inverse_dict[test_data[i]], prob*100)
+
+                        if prob*100 < FLAGS.threshold:
+                            count = count + 1
+
+                    if FLAGS.debug is True:
+                        print(out_str)
+
+                    if count > 0:
+                        print("{:.2f}% words below {:.3f} prob".format((count/(len(probs) - 1)*100), FLAGS.threshold))
 
           # Whole text processing
         elif test:
