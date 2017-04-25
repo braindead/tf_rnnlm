@@ -112,23 +112,23 @@ def main(_):
       
       with tf.Session() as session:
         # Loading everything (but w_t) from file
-        v = tf.all_variables() 
+        v = tf.global_variables() 
         v.remove(w_t)
       
-        print("loading %s"%str(v))
+        print("loading %s"%FLAGS.src)
         saver = tf.train.Saver(v)
         session = _restore_session(saver, session)  
         
         # Only init w_t. Otherwise the model will be
         # corrupted with input
-        init_op = tf.initialize_variables([ w_t ])
+        init_op = tf.variables_initializer([ w_t ])
         session.run(init_op)
 
 	
         # Saving everything except w
         v.remove(w) 
 	v.append(w_t)
-	print("saving %s"%str(v))  
+	print("saving %s"%FLAGS.dst)  
         saver = tf.train.Saver(v)
         _save_checkpoint(saver, session, "wt2w.ckpt")
         

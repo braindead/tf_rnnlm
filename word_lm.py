@@ -76,7 +76,7 @@ import reader
 # same tokenization as training set
 import sentence_cleaner
 
-ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes", "probs"]
+ACTIONS = ["test", "train", "ppl", "predict", "continue", "loglikes", "probs", "export"]
 LOSS_FCTS = ["softmax", "nce", "sampledsoftmax"]
 
 MODEL_PARAMS_INT = [
@@ -438,7 +438,7 @@ def main(_):
 
   train = action in ["train", "continue"]
   test = action == "test"
-  linebyline = action in ["ppl", "loglikes", "predict", "probs"]
+  linebyline = action in ["ppl", "loglikes", "predict", "probs", "export"]
 
   util.mkdirs(FLAGS.model_dir)
 
@@ -529,6 +529,10 @@ def main(_):
 
       else:
         session = _restore_session(saver, session)
+
+        if FLAGS.action == "export":
+            tf.train.write_graph(session.graph_def, FLAGS.model_dir, 'graph.pb')
+            sys.exit()
 
         # Line by line processing (=ppl, predict, loglikes)
         if linebyline:
